@@ -1,0 +1,10 @@
+indir:               "./data/indir2"
+ref:                 "./assets/BFP_barcode_reference_library.fasta"
+mode:                "single-bulk"
+outdir:              "./results"
+upconstant:          "TACGATTGACTA"
+downconstant:        "TGCTAATGCGTACTG"
+constants:           "both"
+barcode_length:      60
+min_readlength:      20
+minqual:             30
