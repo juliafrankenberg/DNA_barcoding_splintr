@@ -2,7 +2,7 @@ JFG34: This is the bioinformatic analysis for JFG28 - In vitro SPLINTR barcoding
 
 The first step is to generate barcode counts files for each sample, and this is done following the nextflow pipeline BARtab: https://github.com/DaneVass/BARtab?tab=readme-ov-file#performance
 
-The second step is to further process the barcode counts files and get plots to understand the data; this is done following an R scrip: https://danevass.github.io/bartools/articles/bartools_quickstart.html
+The second step is to further process the barcode counts files and get plots to understand the data; this is done based on an R script: https://danevass.github.io/bartools/articles/bartools_quickstart.html
 
 Both analyses steps were developed by the authors of the SPLINTR paper (Dane Vass). 
 
@@ -74,7 +74,20 @@ Run the BARtab nextflow pipeline:
 
     qsub a2_run_pipeline.sh
 
-Check output files in results folder. 
+Check output files in results folder. See Github BARtab page for more information on outputs. 
+
+
+# Run bartools
+
+This can be run locally (i.e. not on apocrita)
+
+If not done yet, install bartools following instructions on: https://danevass.github.io/bartools/articles/bartools_quickstart.html
+
+I am currently working with the script provided above and optimising it for my samples. 
+
+## Prepare input files
+
+Copy text count files from the results/counts directory output of BARTab into a ./data directory. Will also need a metadata file with sample information. I wrote this one in excel manually. See the one used here as an example. 
 
 
 
