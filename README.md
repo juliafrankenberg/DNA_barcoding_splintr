@@ -10,7 +10,9 @@ Both analyses steps were developed by the authors of the SPLINTR paper (Dane Vas
 
 For more details on the steps of the pipeline: https://github.com/DaneVass/BARtab?tab=readme-ov-file#performance
 
-**NOTE: this analysis is performed on QMUL apocrita; if not using it some things in these steps may need to change (e.g. running scripts). Inspect scripts I wrote before running to check file paths etc.**
+**NOTE1: this analysis is performed on QMUL apocrita; if not using it some things in these steps may need to change (e.g. running scripts). Inspect scripts I wrote before running to check file paths etc.**
+
+**NOTE2: raw data (i.e. fastq files sent by Novogene) are not backed up so quite precious, and are in data folder where permissions have been removed (chmod 444). These files should not need to be touched as analyses at this step is complete, but if re-running analysis for some reason, will need to edit permissions of the folder (e.g. chmod 777), but do remove permissions after to avoid accidentally deleting files**
 
 ## Installing the pipeline and dependencies
 
@@ -76,18 +78,20 @@ Run the BARtab nextflow pipeline:
 
 Check output files in results folder. See Github BARtab page for more information on outputs. 
 
+Note: there are lots of additional folders generated and I don't know why; ignore these. 
 
-# Run bartools
+
+# Bartools
 
 This can be run locally (i.e. not on apocrita)
 
 If not done yet, install bartools following instructions on: https://danevass.github.io/bartools/articles/bartools_quickstart.html
 
-I am currently working with the script provided above and optimising it for my samples. 
+My scripts have been adapted from the script above. If re-running them or changing them, download packages used from the renv.lock file.
 
 ## Prepare input files
 
-Copy text count files from the results/counts directory output of BARTab into a ./data directory. Will also need a metadata file with sample information. I wrote this one in excel manually. See the one used here as an example. 
+Copy text count files from the results/counts directory output of BARTab into a /data/R directory in local computer if running this part of analysis locally (i.e. using FileZilla). Will also need a metadata file with sample information. I wrote this one in excel manually. See the one used here as an example. 
 
 
 

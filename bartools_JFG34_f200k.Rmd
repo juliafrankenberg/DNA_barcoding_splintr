@@ -1,0 +1,529 @@
+---
+title: "SPLINTR barcode analysis, JFG34"
+author: "Julia F Garcia, adapted from Dane Vass"
+output: 
+  rmarkdown::html_document:
+    toc: true
+    number_sections: true
+    toc_depth: 3
+    highlight: tango 
+date: April 2024
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+# Analysis of the 200k founder population
+
+## 0. Install and load the `bartools` package
+
+You can install bartools from
+[GitHub](https://github.com/DaneVass/bartools):
+
+```{r eval=FALSE}
+# first install Bioconductor dependencies
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install(c("edgeR", "limma", "ComplexHeatmap"))
+
+# then install bartools via GitHub
+if (!requireNamespace("devtools", quietly = TRUE)) {
+  install.packages("devtools")
+}
+devtools::install_github("DaneVass/bartools", dependencies = TRUE, force = TRUE)
+```
+
+```{r setup, warning=FALSE, message=FALSE}
+# Don't inclue warning and messages in output
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+# Time stamp
+Sys.time()
+
+# Clean environment
+rm(list=ls())
+graphics.off()
+
+#load bartools library
+library(bartools)
+library(dplyr)
+library(rmarkdown)
+knitr::opts_chunk$set(dev="png")
+
+#results folder
+results.plots <- "results/R/plots"
+
+dir.create(results.plots, showWarnings = F, recursive = T)
+```
+
+## 1. Importing DNA barcode count data
+
+### Generating a DGEList object from sample counts and metadata
+
+Need to have 2 files: sample counts (output of BARTab pipeline), and a metadata file with sample information (make sure that the rownames are your unique sample names). 
+
+```{r}
+#Load metadata
+
+samplesheet <- read.csv("data/R/metadata.csv",
+  header = T,
+  stringsAsFactors = F
+)
+
+samplesheet[samplesheet == ""] <- NA
+samplesheet$files <- paste(samplesheet$X, "_rawcounts.txt", sep = "")
+paged_table(samplesheet)
+```
+
+Load in the counts as specified in the samplesheet into a DGEList object.
+The function expects file locations to be specified either as character vector of filenames, or as a column named files in the samplesheet. This results in the creation of a DGEList object containing counts and metadata information for each sample. Check that all metadata information is present.
+
+```{r}
+
+test.dge <- edgeR::readDGE(
+  files = samplesheet,
+  path = "./data/R",
+  group = samplesheet$Treatment,
+  labels = samplesheet$Name,
+  header = F
+)
+
+paged_table(test.dge$samples)
+
+counts <- as.data.frame(test.dge$counts)
+paged_table(counts)
+```
+
+### Separating samples
+
+Here I am only examining how a founder population would look in an experiment, so looking at the "f200k" founder population (which was sequenced but not used in any experiment). I'll be able to assess: 
+  - How many barcodes do we expect to start with in an experiment? 
+  - Is the uptake of barcodes skewed to the ones more present in the plasmid library or indeed random? Are they all present at similar frequencies?
+  
+I am also including another sample, which was the untreated sample collected day 5 post-collection of founder population, but in this sample the founder population was not the one I am analysing here (the founder population for that experiment was lost in library prep). Comparing these two will tell me a few things: 
+  - Number and diversity of barcodes in an inital founder population vs 5 days later (though not super accurate as it's not the same founder population)
+  - The randomness of barcode uptake in the transduction (do these two samples have the same or different barcodes?)
+  
+  
+```{r}
+#dataset with only 200k sample, and one good sample from experiment to compare to
+samples_to_include <- c("f200k_A", "f200k_B", "UT_day05_3A", "UT_day05_3B")
+
+test.dge$counts <- test.dge$counts[, colnames(test.dge$counts) %in% samples_to_include]
+test.dge$samples <- test.dge$samples[rownames(test.dge$samples) %in% samples_to_include,]
+
+paged_table(test.dge$samples)
+
+counts <- as.data.frame(test.dge$counts)
+paged_table(counts)
+```
+
+
+## 2. Data QC and Normalisation
+
+### Data QC
+
+We first want to ensure that we are working with clean data.
+Using the `thresholdCounts()` function we can determine an appropriate threshold to apply to the data to maximise signal to noise and retain true and informative barcodes. 
+
+Basically, deciding how to filter out barcodes that are present at low levels. How many of each barcode needs to be present in X samples. 
+
+We can test different thresholding parameters, such as absolute thresholds on total read counts as below.
+
+```{r}
+# Remove barcodes (rows) with no data
+test.dge <- test.dge[rowSums(test.dge$counts) != 0, ]
+```
+
+
+```{r}
+thresholdCounts(
+  test.dge,
+  type = "absolute",
+  threshold = 1,
+  minSamples = 1,
+  plot = T,
+  group = "group"
+)
+
+thresholdCounts(
+  test.dge,
+  type = "absolute",
+  threshold = 10,
+  minSamples = 1,
+  plot = T,
+  group = "group"
+)
+
+thresholdCounts(
+  test.dge,
+  type = "absolute",
+  threshold = 50,
+  minSamples = 1,
+  plot = T,
+  group = "group"
+)
+
+```
+
+Or relative thresholds based on proportion within a sample. So filtering out barcodes present at less than 1e-10 % or 1e-5 % proportion in the samples
+
+```{r}
+thresholdCounts(
+  test.dge,
+  type = "relative",
+  threshold = 1e-10,
+  minSamples = 1,
+  plot = T,
+  group = "group"
+)
+thresholdCounts(
+  test.dge,
+  type = "relative",
+  threshold = 1e-5,
+  minSamples = 1,
+  plot = T,
+  group = "group"
+)
+
+```
+
+Here we will continue with an absolute threshold of 10 in one samples.
+
+```{r}
+pdf(paste0(results.plots, "/", "nr_barcodes_200k.pdf"), width = 8, height = 6)
+thresholdCounts(
+  test.dge,
+  type = "absolute",
+  threshold = 10,
+  minSamples = 1,
+  plot = T,
+  group = "group"
+)
+dev.off()
+
+
+dge.filtered <-
+  thresholdCounts(
+    test.dge,
+    type = "absolute",
+    threshold = 10,
+    minSamples = 1,
+    plot = F
+  )
+```
+
+We then normalise samples to sequencing depth to counts per million using `normaliseCounts()`.
+
+```{r}
+dge.cpmnorm <- normaliseCounts(dge.filtered, method = "CPM")
+```
+
+
+We can plot the raw and normalised sequencing depth to get an idea of depth discrepancies between PCR replicates.
+
+```{r}
+# raw counts per sample
+plotReadCounts(dge.filtered, group = "group")
+```
+
+```{r}
+# normalised counts per sample
+plotReadCounts(dge.cpmnorm, group = "group")
+```
+
+For lentiviral based cellular barcoding experiments, such as this one, it is common for the library to exhibit a degree of skewness based on the cloning method.
+This means that some barcodes are represented in the library more than others and so have a greater chance to be transduced into multiple cells.\
+
+Most experiments assume that each individual barcode is transduced into only one cell, and that each cell is only transduced with one barcode.
+This is ensured using a low multiplicity of infection (MOI) transduction in which the likelihood that a cell is transduced with one or more barcode containing virions follows a Poisson distribution.
+
+With this in mind, it also can be useful to check the total counts per barcode to identify bias in counts in sample vs. frequency of barcode in reference library.\
+The barcodes are labelled based on their ranked frequency in the reference library (this is how the counts files are prepared based on the reference file in the BARtab pipeline)
+
+```{r}
+# plot detected barcodes ordered by frequency in reference library
+plotBarcodeCounts(dge.cpmnorm, log10 = F)
+
+
+pdf(paste0(results.plots, "/", "counts_per_barcode_200k.pdf"), width = 8, height = 6)
+plotBarcodeCounts(dge.cpmnorm, log10 = F)
+dev.off()
+
+
+# plot log10 barcode counts
+plotBarcodeCounts(dge.cpmnorm, log10 = T)
+
+# order barcodes by count across samples
+plotBarcodeCounts(dge.cpmnorm, log10 = F, order = T)
+
+# order barcodes by count across samples with log norm
+plotBarcodeCounts(dge.cpmnorm, log10 = T, order = T)
+```
+
+In the first and second plot individual barcodes on the x-axis are ordered based on their frequency in the reference library pool.\
+An increased number of counts per barcode toward the left hand side of the plot would be suggestive of transduction bias, meaning that there are more reads on average attributed to the more abundant barcodes in the library.
+And so, likely multiple cells were transduced with the same barcode.\
+We don't see this here suggesting that this is not a problem for this experiment.
+
+### Check correlation between PCR replicates
+
+It is also important to ensure that individual samples are sequenced to an appropriate depth as this ensures that the entire barcode repertoire present in a sample is captured in the data.
+Sequencing technical duplicates of a sample generated at the library PCR stage is a good way to ensure this.
+
+
+```{r message=FALSE}
+#Add extra column with sample name WITHOUT the PCR replicate detail, so there should be 2 with the same name
+dge.filtered$samples$Name_replicates <- substr(dge.filtered$samples$Name, 1, nchar(test.dge$samples$Name) - 1)
+
+# get all unique samples
+# column "group" contains information on replicates here
+unique_samples <- unique(dge.filtered$samples$Name_replicates)
+
+# Iterate over each unique sample using a for loop
+for (x in unique_samples) {
+  # Subset dge object to get replicates of current sample
+  replicate_names <- colnames(dge.filtered)[dge.filtered$samples$Name_replicates %in% as.character(x)]
+  
+  # Check if there are at least two replicate names to plot
+  if (length(replicate_names) >= 2) {
+    # Generate plot using plotBarcodeRegression function
+    plot <- plotBarcodeRegression(
+      dge.filtered,
+      sample1 = replicate_names[1],
+      sample2 = replicate_names[2],
+      rug = TRUE,
+      trans = "log1p"
+    )
+    
+    # Print the plot (adjust this based on your plotting environment)
+    print(plot)
+    
+    pdf(paste0(results.plots, "/", replicate_names, "PCR_replicates.pdf"), width = 8, height = 6)
+    print(plot)
+    dev.off()
+
+    
+    
+  } else {
+    # Print a message if less than two replicates are found for the sample
+    cat(paste("Less than two replicates found for sample:", x, "\n"))
+  }
+}
+
+```
+
+We fit a linear model to both technical replicates per sample and plot the regression line.
+Note that we expect a very high correlation because these are PCR replicates of the same barcode pool.
+
+We can also easily get the correlation values between replicates using `calcReplicateCorr`.
+
+Samples can be filtered for high or low correlation using the `threshold` and `return` variables.
+
+```{r}
+corrs <- calcReplicateCorr(dge.filtered, group = "Name_replicates")
+corrs[which(corrs < 0.999)]
+corrs
+```
+
+
+### Collapse PCR replicates in object
+
+Now that we know our samples are of good quality we have no further use of the PCR replicate information.
+From this point onward its a good idea to collapse our PCR replicates.
+
+```{r}
+dim(dge.filtered)
+```
+
+`collapseReplicates` can take the average (default behavior) or the sum of PCR technical replicates within each sample.
+Here we take the average.
+Users may want to sum PCR replicates if there is evidence of sampling bias across technical repeats (i.e. poor correlation score or other evidence).
+
+```{r}
+dge.filtered.collapsed <- collapseReplicates(
+  dge.filtered,
+  group = "Name_replicates",
+  method = "mean"
+)
+```
+
+The result is a clean barcode sequencing dataset ready for further investigation and visualisation.
+
+```{r eval=FALSE}
+head(dge.filtered.collapsed)
+```
+
+
+## 3. Visualisation
+
+### Number of barcodes
+
+```{r}
+plotDetectedBarcodes(
+  dge.filtered.collapsed,
+  percentile = 1,
+  plot = T,
+  group = "Treatment", 
+)
+```
+
+
+### Frequency distribution of barcodes in founder population
+
+Here we can see the number of barcodes in the sample, and see whether each barcode is present at similar levels. We can compare the distribution of the founder population with the UT_day5 population, we would expect the distribution to vary more in the UT day 5 population of there is enrichment for certain cells.
+
+```{r}
+#Filter out barcodes non-existant in 200k sample or UT_day5 sample
+counts_200k <- as.data.frame(dge.filtered.collapsed$counts) %>%
+  filter(f200k_ != 0) %>%
+  select("f200k_") %>%
+  mutate(percent = (f200k_ * 100)/ sum(f200k_))
+
+counts_UT <- as.data.frame(dge.filtered.collapsed$counts) %>%
+  filter(UT_day05_3 != 0) %>%
+  select("UT_day05_3") %>%
+  mutate(percent = (UT_day05_3 * 100)/ sum(UT_day05_3))
+
+#frequency distribution
+plot <- ggplot(counts_200k, aes(x = f200k_)) +
+  geom_histogram(binwidth = 10, fill = "skyblue", color = "black", alpha = 0.7) +
+  xlab("Counts per barcode") +
+  ylab("Frequency") +
+  ggtitle("Distribution of counts per barcode in 200k founder population") + 
+  scale_x_continuous(
+    breaks = c(0, 250, 500, 750, 1000, 2000)  
+  )
+
+print(plot)
+pdf(paste0(results.plots, "/", "frequency_200k.pdf"), width = 8, height = 6)
+print(plot)
+dev.off()
+
+
+#frequency distribution
+plot <- ggplot(counts_UT, aes(x = UT_day05_3)) +
+  geom_histogram(binwidth = 10, fill = "skyblue", color = "black", alpha = 0.7) +
+  xlab("Counts per barcode") +
+  ylab("Frequency") +
+  ggtitle("Distribution of counts per barcode in UT day 5 population") + 
+  scale_x_continuous(
+    breaks = c(0, 2000, 5000, 10000, 50000)  
+  )
+
+print(plot)
+pdf(paste0(results.plots, "/", "frequency_UT_day5.pdf"), width = 8, height = 6)
+print(plot)
+dev.off()
+
+#proportion
+ggplot(counts_200k, aes(x = percent)) +
+  geom_histogram(fill = "skyblue", color = "black", alpha = 0.7) +
+  xlab("Propotion") +
+  ylab("Nr of barcodes") +
+  ggtitle("Proportion barcode in 200k founder population") +
+  xlim(0, 0.5) + 
+  ylim(0, 2500)
+
+ggplot(counts_UT, aes(x = percent)) +
+  geom_histogram(fill = "skyblue", color = "black", alpha = 0.7) +
+  xlab("Propotion") +
+  ylab("Nr of barcodes") +
+  ggtitle("Proportion barcode in UT day 5 population") +
+  xlim(0, 0.5) + 
+  ylim(0, 1050)
+
+```
+
+### Overlap of barcodes between two transductions
+
+This will show us how many barcodes were transduced in common in two different transductions. Would help us show that barcode transduction is mostly random?
+
+```{r, fig.width=8, fig.height=8}
+library(VennDiagram)
+library(gridExtra)
+
+
+counts_200k <- as.data.frame(dge.filtered.collapsed$counts) %>%
+  filter(f200k_ != 0) %>%
+  select("f200k_")
+
+counts_UT <- as.data.frame(dge.filtered.collapsed$counts) %>%
+  filter(UT_day05_3 != 0) %>%
+  select("UT_day05_3")
+
+
+venn1 <- venn.diagram(
+  x = list(f200k = rownames(counts_200k), UT_day05 = rownames(counts_UT)),
+  filename = NULL,
+  category.names = c("f200k", "UT_day05"),
+  col=c("#cc99cc", '#21908dff'),
+  fill = c(alpha("#cc99cc",0.3), alpha('#21908dff',0.3)),
+  cex = 2,
+  fontfamily = "sans", 
+  cat.fontfamily = "sans", 
+  cat.pos = c(-35, 27),
+  cat.dist = c(0.035, 0.035),
+  main.fontfamily = "sans", 
+  main.cex = 2,
+  cat.cex = 2, 
+  lwd = 5
+
+)   
+
+grid.arrange(venn1)
+
+
+pdf(paste0(results.plots, "/", "overlpap_barcodes.pdf"), width = 8, height = 8)
+grid.arrange(venn1)
+dev.off()
+```
+
+
+
+### Diversity analysis
+
+We can examine within-sample diversity in a few different ways.
+The most common are Shannon, Simpson, Inverse Simpson and Gini.
+Each will be applicable in different circumstances, however the Shannon diversity index is more widely used to compare global diversity amongst populations of barcoded cells.
+
+`calcDivIndexes` can be used to determine various diversity indices per sample
+
+```{r}
+diversity <- calcDivIndexes(dge.filtered.collapsed)
+diversity
+
+#max Shannon diversity calculated by ln(sample size) for sample 200k only
+log(nrow(counts))
+```
+According to chatgpt: 
+A Shannon index value of 8 is relatively high and suggests a community or dataset with high species diversity and evenness.
+In practical terms, a higher Shannon diversity index often indicates a more diverse and balanced community where multiple species are present in relatively equal abundance.
+
+
+These diversity calculations can then be fed to `plotDivIndexes` for visualisation as either a bar or dotplot
+
+```{r}
+# bar plot
+plot <- plotDivIndexes(
+  dge.filtered.collapsed,
+  div = diversity,
+  metric = "shannon",
+  group = "Treatment"
+)
+
+print(plot)
+pdf(paste0(results.plots, "/", "diversity_200k.pdf"), width = 6, height = 6)
+print(plot)
+dev.off()
+
+
+```
+
+As we expect the founder population is more diverse, whereas some selection made the UT sample a bit less diverse (though not much as there is not really any selective pressure). 
+
+
+## 5. Session Info
+
+```{r}
+sessionInfo()
+```
